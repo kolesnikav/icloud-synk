@@ -20,7 +20,11 @@ import (
 	"github.com/kolesnikav/icloud-synk/internal/icloud"
 )
 
-// folderBatch is how many folders are requested per API call while walking.
+// folderListBatch limits folder-list requests. Larger batches have stalled
+// against Apple's Drive endpoint, while batches of ten respond reliably.
+const folderListBatch = 10
+
+// folderBatch is used for Drive trash operations.
 const folderBatch = 30
 
 // Engine performs synchronisation passes.
@@ -156,7 +160,7 @@ func (e *Engine) fetchRemote(ctx context.Context) (files, dirs map[string]icloud
 		ids := make([]string, 0, len(pending))
 		for id := range pending {
 			ids = append(ids, id)
-			if len(ids) == folderBatch {
+			if len(ids) == folderListBatch {
 				break
 			}
 		}
@@ -202,6 +206,8 @@ func (e *Engine) fetchRemote(ctx context.Context) (files, dirs map[string]icloud
 		for id, rel := range next {
 			pending[id] = rel
 		}
+		e.log.Debug("drive folder walk progress",
+			"folders", len(dirs), "files", len(files), "pending_folders", len(pending))
 	}
 	return files, dirs, nil
 }
@@ -741,7 +747,7 @@ func (e *Engine) refreshEtags(ctx context.Context) error {
 		ids = append(ids, id)
 	}
 	for len(ids) > 0 {
-		n := min(len(ids), folderBatch)
+		n := min(len(ids), folderListBatch)
 		folders, err := e.cl.ListFolders(ctx, ids[:n])
 		if err != nil {
 			return err
