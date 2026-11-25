@@ -637,8 +637,15 @@ func (c *Client) submit2FA(ctx context.Context, code string, ch *Challenge) erro
 		if err == nil {
 			return nil
 		}
-		if ae, ok := err.(*APIError); ok && ae.Status == 400 {
-			return errors.New("iCloud rejected the code — it may have expired, request a new one")
+		if ae, ok := err.(*APIError); ok {
+			if ae.Status == 400 {
+				return errors.New("iCloud rejected the code — it may have expired, request a new one")
+			}
+			// Apple API change (iOS/macOS 26.4): returns 409 with {"valid": true}
+			// when the code is correct, instead of the old 204 No Content.
+			if ae.Status == http.StatusConflict && hasValidSecurityCode(ae.Body) {
+				return nil
+			}
 		}
 		return fmt.Errorf("verifying the SMS code: %w", err)
 	}
@@ -650,10 +657,32 @@ func (c *Client) submit2FA(ctx context.Context, code string, ch *Challenge) erro
 	if err == nil {
 		return nil
 	}
-	if ae, ok := err.(*APIError); ok && ae.Status == 400 {
-		return errors.New("iCloud rejected the code — it may have expired, request a new one")
+	if ae, ok := err.(*APIError); ok {
+		if ae.Status == 400 {
+			return errors.New("iCloud rejected the code — it may have expired, request a new one")
+		}
+		// Apple API change (iOS/macOS 26.4): returns 409 with {"valid": true}
+		// when the code is correct, instead of the old 204 No Content.
+		if ae.Status == http.StatusConflict && hasValidSecurityCode(ae.Body) {
+			return nil
+		}
 	}
 	return fmt.Errorf("verifying the two-factor code: %w", err)
+}
+
+// hasValidSecurityCode checks whether the response body indicates a valid
+// security code (Apple's new API returns 409 with {"valid": true} instead of
+// 204 No Content when the code is correct).
+func hasValidSecurityCode(body string) bool {
+	var resp struct {
+		SecurityCode struct {
+			Valid bool `json:"valid"`
+		} `json:"securityCode"`
+	}
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		return false
+	}
+	return resp.SecurityCode.Valid
 }
 
 // trustSession exchanges the verified session for a long-lived trust token so
